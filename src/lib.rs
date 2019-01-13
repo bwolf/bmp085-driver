@@ -4,8 +4,9 @@
 //!
 //! [`embedded-hal`]: https://docs.rs/embedded-hal/0.2
 
-#![deny(missing_docs)]
 #![no_std]
+#![deny(missing_docs)]
+#![allow(clippy::trivially_copy_pass_by_ref, clippy::new_ret_no_self)]
 
 extern crate cast;
 extern crate embedded_hal as hal;
@@ -142,6 +143,8 @@ pub type DeciCelcius = i32;
 /// Pressure in pascal
 pub type Pascal = i32;
 
+// Type of intermediate value from temperature calculation. Used in
+// pressure calculation after sensor read-out.
 type B5 = i32;
 
 #[allow(dead_code)]
@@ -157,9 +160,7 @@ where
             oversampling,
         };
 
-        // TODO reset all the registers / the device
-
-        // configure the device
+        // Get calibration coefficients from the BMP085 eeprom
         bmp085.coeff.ac1 = bmp085.read_i16(Register::COEFF_AC1)?;
         bmp085.coeff.ac2 = bmp085.read_i16(Register::COEFF_AC2)?;
         bmp085.coeff.ac3 = bmp085.read_i16(Register::COEFF_AC3)?;
@@ -171,8 +172,6 @@ where
         bmp085.coeff.mb = bmp085.read_i16(Register::COEFF_MB)?;
         bmp085.coeff.mc = bmp085.read_i16(Register::COEFF_MC)?;
         bmp085.coeff.md = bmp085.read_i16(Register::COEFF_MD)?;
-
-        // TODO enable features
 
         Ok(bmp085)
     }
@@ -217,7 +216,7 @@ where
 
 #[allow(dead_code)]
 fn calculate_temperature(ut: i32, coeff: &Coefficients) -> (DeciCelcius, B5) {
-    let x1: i32 = (ut - i32(coeff.ac6)) * i32(coeff.ac5) >> 15;
+    let x1: i32 = ((ut - i32(coeff.ac6)) * i32(coeff.ac5)) >> 15;
     let x2: i32 = (i32(coeff.mc) << 11) / (x1 + i32(coeff.md));
     let b5: i32 = x1 + x2; // Value b5 is used in pressure calculation
     let t: DeciCelcius = (b5 + 8) >> 4;
@@ -229,7 +228,7 @@ fn calculate_true_pressure(up: i32, b5: B5, oss: Oversampling, coeff: &Coefficie
     let b6: i32 = b5 - 4000;
 
     // B3
-    let x1: i32 = (i32(coeff.b2) * (b6 * b6) >> 12) >> 11;
+    let x1: i32 = ((i32(coeff.b2) * (b6 * b6)) >> 12) >> 11;
     let x2: i32 = (i32(coeff.ac2) * b6) >> 11;
     let x3: i32 = x1 + x2;
     let b3: i32 = (((i32(coeff.ac1) * 4 + x3) << oss.value()) + 2) >> 2;
@@ -243,7 +242,7 @@ fn calculate_true_pressure(up: i32, b5: B5, oss: Oversampling, coeff: &Coefficie
     // B7 (use u32 instead of long, differs from datasheet)
     let b7: u32 = ((up - b3) as u32) * (50000u32 >> oss.value());
 
-    let p: i32 = if b7 < 0x80000000 {
+    let p: i32 = if b7 < 0x8000_0000 {
         b7 * 2 / b4
     } else {
         b7 / b4 * 2
@@ -252,7 +251,7 @@ fn calculate_true_pressure(up: i32, b5: B5, oss: Oversampling, coeff: &Coefficie
     let x1: i32 = (p >> 8) * (p >> 8);
     let x1: i32 = (x1 * 3038) >> 16;
     let x2: i32 = (-7357 * p) >> 16;
-    return p + ((x1 + x2 + 3791) >> 4);
+    p + ((x1 + x2 + 3791) >> 4)
 }
 
 #[cfg(test)]
