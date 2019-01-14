@@ -23,7 +23,7 @@ use hal::blocking::i2c::{Write, WriteRead};
 /// BMP085 module address. The LSB of the device address
 /// distinguishes between read (1) and write (0) operation,
 /// corresponding to address 0xEF (read) and 0xEE (write).
-// embedded-hal/blocking/i2c uses 7-bit addresses.
+// Note: embedded-hal/blocking/i2c uses 7-bit addresses.
 #[allow(clippy::unreadable_literal)]
 const ADDRESS: u8 = 0b1110111; // 7-bit I2C address, missing least significant r/w bit
 
@@ -43,7 +43,9 @@ enum Register {
     COEFF_MB = 0xBA,
     COEFF_MC = 0xBC,
     COEFF_MD = 0xBE,
+    /// Control register
     CONTROL_REG = 0xF4,
+    /// First value register, next is 0xF7, 0xF8
     VALUE_REG = 0xF6,
 }
 
@@ -69,14 +71,29 @@ enum ControlRegisterValue {
     CONTROL_VALUE_PRESSURE_OSRS_3 = 0xF4, // Max. conversion time 25.5ms
 }
 
+impl From<Oversampling> for ControlRegisterValue {
+    fn from(oss: Oversampling) -> Self {
+        match oss {
+            Oversampling::UltraLowPower => ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_0,
+            Oversampling::Standard => ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_1,
+            Oversampling::HighResolution => ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_2,
+            Oversampling::UltraHighResolution => {
+                ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_3
+            }
+        }
+    }
+}
+
 #[allow(missing_docs)]
 impl ControlRegisterValue {
-    pub fn value(&self) -> u8 {
+    pub fn addr(&self) -> u8 {
         *self as u8
     }
 }
 
-/// Calibration coefficients from BMP085 eeprom
+/// Calibration coefficients from BMP085 eeprom. These are used to
+/// calculate the temperature and the pressure. They are
+/// calibrated by the manufacturer, individually for each silicon.
 struct Coefficients {
     pub ac1: i16,
     pub ac2: i16,
@@ -137,10 +154,10 @@ pub struct Bmp085<I2C, TIMER: DelayUs<u16>> {
     oss: Oversampling,
 }
 
-/// Temperature as deci celcius
+/// Temperature in deci Celsius (dC)
 pub type DeciCelcius = i32;
 
-/// Pressure in pascal
+/// Pressure in Pascal (Pa)
 pub type Pascal = i32;
 
 // Type of intermediate value from temperature calculation. Used in
@@ -192,13 +209,10 @@ where
         N: ArrayLength<u8>,
     {
         let mut buffer: GenericArray<u8, N> = unsafe { mem::uninitialized() };
-
         {
             let buffer: &mut [u8] = &mut buffer;
-
             self.i2c.write_read(ADDRESS, &[reg.addr()], buffer)?;
         }
-
         Ok(buffer)
     }
 
@@ -208,30 +222,22 @@ where
 
     /// Read temperature and pressure from sensor
     pub fn read(&mut self) -> Result<PT, E> {
-        // Read temperature
+        // Read temperature, wait 4.5ms before reading the value
         self.write_register(
             Register::CONTROL_REG,
-            ControlRegisterValue::CONTROL_VALUE_TEMPERATURE.value(),
+            ControlRegisterValue::CONTROL_VALUE_TEMPERATURE.addr(),
         )?;
-        // Wait 4.5ms or wait for the output pin EOC is finished (logic 1)
         self.timer.delay_us(4500);
-        let ut: i16 = self.read_i16(Register::VALUE_REG)?; // TODO i32 or i16?
+        let ut = self.read_i16(Register::VALUE_REG)?;
         let (temperature, b5) = calculate_temperature(i32(ut), &self.coeff);
 
         // Read pressure
-        let pressure_kind = match self.oss {
-            Oversampling::UltraLowPower => ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_0,
-            Oversampling::Standard => ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_1,
-            Oversampling::HighResolution => ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_2,
-            Oversampling::UltraHighResolution => {
-                ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_3
-            }
-        };
-        self.write_register(Register::CONTROL_REG, pressure_kind.value())?;
+        let press_reg_value = ControlRegisterValue::from(self.oss);
+        self.write_register(Register::CONTROL_REG, press_reg_value.addr())?;
         self.timer.delay_us(1000 * (2 + (3 << self.oss.value())));
-
         let up: GenericArray<u8, U3> = self.read_register(Register::VALUE_REG)?;
-        let up: i32 = (i32(up[0]) << 16) + (i32(up[1]) << 8) + i32(up[2]);
+        let up: i32 =
+            ((i32(up[0]) << 16) + (i32(up[1]) << 8) + i32(up[2])) >> (8 - self.oss.value());
         let pressure: Pascal = calculate_true_pressure(up, b5, self.oss, &self.coeff);
 
         Ok(PT {
@@ -248,6 +254,7 @@ pub struct PT {
     pressure: Pascal,
 }
 
+// Temperature calculation according data-sheet
 fn calculate_temperature(ut: i32, coeff: &Coefficients) -> (DeciCelcius, B5) {
     let x1: i32 = ((ut - i32(coeff.ac6)) * i32(coeff.ac5)) >> 15;
     let x2: i32 = (i32(coeff.mc) << 11) / (x1 + i32(coeff.md));
@@ -256,6 +263,7 @@ fn calculate_temperature(ut: i32, coeff: &Coefficients) -> (DeciCelcius, B5) {
     (t, b5)
 }
 
+// Pressure calculation according data-sheet
 fn calculate_true_pressure(up: i32, b5: B5, oss: Oversampling, coeff: &Coefficients) -> Pascal {
     let b6: i32 = b5 - 4000;
 
@@ -271,7 +279,7 @@ fn calculate_true_pressure(up: i32, b5: B5, oss: Oversampling, coeff: &Coefficie
     let x3: i32 = (x1 + x2 + 2) >> 2;
     let b4: u32 = (u32(coeff.ac4) * ((x3 as u32) + 32768)) >> 15;
 
-    // B7 (use u32 instead of long, differs from datasheet)
+    // B7 (use u32 instead of long, differs from data-sheet)
     let b7: u32 = ((up - b3) as u32) * (50000u32 >> oss.value());
 
     let p: i32 = if b7 < 0x8000_0000 {
@@ -295,7 +303,7 @@ mod tests {
 
     #[test]
     fn calculate_temp_pressure() {
-        // Coefficient values according datasheet
+        // Coefficient values according data-sheet
         let coeff = Coefficients {
             ac1: 408,
             ac2: -72,
@@ -317,7 +325,7 @@ mod tests {
 
         let (deci_c, b5) = calculate_temperature(ut, &coeff);
         assert_eq!(deci_c, 150);
-        assert_eq!(b5, 2400); // Differs from datasheet example, but imho ok
+        assert_eq!(b5, 2400); // Differs from data-sheet example, IMHO OK
 
         let pressure: Pascal = calculate_true_pressure(up, b5, oss, &coeff);
         assert_eq!(pressure, 69964);
