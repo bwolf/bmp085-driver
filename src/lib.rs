@@ -17,16 +17,18 @@ use core::mem;
 use cast::{i16, i32, u16, u32};
 use generic_array::typenum::consts::*;
 use generic_array::{ArrayLength, GenericArray};
+use hal::blocking::delay::DelayUs;
 use hal::blocking::i2c::{Write, WriteRead};
 
 /// BMP085 module address. The LSB of the device address
 /// distinguishes between read (1) and write (0) operation,
 /// corresponding to address 0xEF (read) and 0xEE (write).
-const ADDRESS: u8 = (0x77 << 1); // TODO
+// embedded-hal/blocking/i2c uses 7-bit addresses.
+#[allow(clippy::unreadable_literal)]
+const ADDRESS: u8 = 0b1110111; // 7-bit I2C address, missing least significant r/w bit
 
 /// BMP085 registers
 #[allow(missing_docs)]
-#[allow(dead_code)]
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone)]
 enum Register {
@@ -42,6 +44,7 @@ enum Register {
     COEFF_MC = 0xBC,
     COEFF_MD = 0xBE,
     CONTROL_REG = 0xF4,
+    VALUE_REG = 0xF6,
 }
 
 #[allow(missing_docs)]
@@ -56,7 +59,6 @@ impl Register {
 // EOC (end of conversion) can be used to check if the conversion is
 // finished (logic 1) or still running (logic 0).
 #[allow(missing_docs)]
-#[allow(dead_code)]
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone)]
 enum ControlRegisterValue {
@@ -68,7 +70,6 @@ enum ControlRegisterValue {
 }
 
 #[allow(missing_docs)]
-#[allow(dead_code)]
 impl ControlRegisterValue {
     pub fn value(&self) -> u8 {
         *self as u8
@@ -110,7 +111,6 @@ impl Coefficients {
 
 /// Oversampling modes
 #[allow(missing_docs)]
-#[allow(dead_code)]
 #[derive(Copy, Clone)]
 pub enum Oversampling {
     /// Number of samples 1, conversion time max 4.5ms, average current 3µA
@@ -130,11 +130,11 @@ impl Oversampling {
 }
 
 /// BMP085 driver
-#[allow(dead_code)]
-pub struct Bmp085<I2C> {
+pub struct Bmp085<I2C, TIMER: DelayUs<u16>> {
     i2c: I2C,
+    timer: TIMER,
     coeff: Coefficients,
-    oversampling: Oversampling,
+    oss: Oversampling,
 }
 
 /// Temperature as deci celcius
@@ -147,17 +147,18 @@ pub type Pascal = i32;
 // pressure calculation after sensor read-out.
 type B5 = i32;
 
-#[allow(dead_code)]
-impl<I2C, E> Bmp085<I2C>
+impl<I2C, TIMER, E> Bmp085<I2C, TIMER>
 where
     I2C: WriteRead<Error = E> + Write<Error = E>,
+    TIMER: DelayUs<u16>,
 {
     /// Create a new driver from a I2C peripheral
-    pub fn new(i2c: I2C, oversampling: Oversampling) -> Result<Self, E> {
+    pub fn new(i2c: I2C, timer: TIMER, oss: Oversampling) -> Result<Self, E> {
         let mut bmp085 = Bmp085 {
             i2c,
+            timer,
             coeff: Coefficients::new(),
-            oversampling,
+            oss,
         };
 
         // Get calibration coefficients from the BMP085 eeprom
@@ -195,9 +196,7 @@ where
         {
             let buffer: &mut [u8] = &mut buffer;
 
-            const MULTI: u8 = 1 << 7;
-            self.i2c
-                .write_read(ADDRESS, &[reg.addr() | MULTI], buffer)?;
+            self.i2c.write_read(ADDRESS, &[reg.addr()], buffer)?;
         }
 
         Ok(buffer)
@@ -207,14 +206,48 @@ where
         self.i2c.write(ADDRESS, &[reg.addr(), byte])
     }
 
-    //pub fn read(&self) {
-    //let uncompensated_temperature = self.read_uncompensated_temperature();
-    //let uncompensated_pressure = self.read_uncompensated_pressure();
-    //let (deci_celcius, b5) = self.calculate_temperature
-    //}
+    /// Read temperature and pressure from sensor
+    pub fn read(&mut self) -> Result<PT, E> {
+        // Read temperature
+        self.write_register(
+            Register::CONTROL_REG,
+            ControlRegisterValue::CONTROL_VALUE_TEMPERATURE.value(),
+        )?;
+        // Wait 4.5ms or wait for the output pin EOC is finished (logic 1)
+        self.timer.delay_us(4500);
+        let ut: i16 = self.read_i16(Register::VALUE_REG)?; // TODO i32 or i16?
+        let (temperature, b5) = calculate_temperature(i32(ut), &self.coeff);
+
+        // Read pressure
+        let pressure_kind = match self.oss {
+            Oversampling::UltraLowPower => ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_0,
+            Oversampling::Standard => ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_1,
+            Oversampling::HighResolution => ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_2,
+            Oversampling::UltraHighResolution => {
+                ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_3
+            }
+        };
+        self.write_register(Register::CONTROL_REG, pressure_kind.value())?;
+        self.timer.delay_us(1000 * (2 + (3 << self.oss.value())));
+
+        let up: GenericArray<u8, U3> = self.read_register(Register::VALUE_REG)?;
+        let up: i32 = (i32(up[0]) << 16) + (i32(up[1]) << 8) + i32(up[2]);
+        let pressure: Pascal = calculate_true_pressure(up, b5, self.oss, &self.coeff);
+
+        Ok(PT {
+            temperature,
+            pressure,
+        })
+    }
 }
 
+/// Result of the BMP085 sensor read-out
 #[allow(dead_code)]
+pub struct PT {
+    temperature: DeciCelcius,
+    pressure: Pascal,
+}
+
 fn calculate_temperature(ut: i32, coeff: &Coefficients) -> (DeciCelcius, B5) {
     let x1: i32 = ((ut - i32(coeff.ac6)) * i32(coeff.ac5)) >> 15;
     let x2: i32 = (i32(coeff.mc) << 11) / (x1 + i32(coeff.md));
@@ -223,7 +256,6 @@ fn calculate_temperature(ut: i32, coeff: &Coefficients) -> (DeciCelcius, B5) {
     (t, b5)
 }
 
-#[allow(dead_code)]
 fn calculate_true_pressure(up: i32, b5: B5, oss: Oversampling, coeff: &Coefficients) -> Pascal {
     let b6: i32 = b5 - 4000;
 
