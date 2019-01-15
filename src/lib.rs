@@ -8,10 +8,6 @@
 #![deny(missing_docs)]
 #![allow(clippy::trivially_copy_pass_by_ref, clippy::new_ret_no_self)]
 
-extern crate cast;
-extern crate embedded_hal as hal;
-extern crate generic_array;
-
 use core::mem;
 
 use cast::{i16, i32, u16, u32};
