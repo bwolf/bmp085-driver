@@ -1,4 +1,4 @@
-# `BMP085`
+# `BMP085-driver`
 
 A platform agnostic driver to interface the BOSCH BMP085 pressure sensor, written in Rust.
 
@@ -8,7 +8,7 @@ This driver was built using the [embedded-hal](https://docs.rs/embedded-hal/) tr
 
 ## [API reference]
 
-[API reference]: https://docs.rs/bmp085
+[API reference]: https://docs.rs/bmp085-driver
 
 ## What works
 

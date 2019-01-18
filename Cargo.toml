@@ -5,8 +5,9 @@ description = "A platform agnostic driver to interface the BOSCH BMP085 pressure
 edition = "2018"
 keywords = ["embedded-hal-driver", "pressure", "thermometer"]
 license = "MIT OR Apache-2.0"
-name = "bmp085"
-repository = "https://github.com/bwolf/bmp085"
+name = "bmp085-driver"
+readme = "README.md"
+repository = "https://github.com/bwolf/bmp085-driver"
 version = "0.1.0"
 
 [features]
