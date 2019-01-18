@@ -16,15 +16,14 @@ use generic_array::{ArrayLength, GenericArray};
 use hal::blocking::delay::DelayUs;
 use hal::blocking::i2c::{Write, WriteRead};
 
-/// BMP085 module address. The LSB of the device address
-/// distinguishes between read (1) and write (0) operation,
-/// corresponding to address 0xEF (read) and 0xEE (write).
-// Note: embedded-hal/blocking/i2c uses 7-bit addresses.
+/// BMP085 module address.
+// The LSB of the device address distinguishes between read (1) and
+// write (0) operation, corresponding to address 0xEF (read) and 0xEE
+// (write). Note: embedded-hal/blocking/i2c uses 7-bit addresses.
 #[allow(clippy::unreadable_literal)]
-const ADDRESS: u8 = 0b1110111; // 7-bit I2C address, missing least significant r/w bit
+const ADDRESS: u8 = 0b1110111; // 7-bit I²C address, missing least significant r/w bit
 
 /// BMP085 registers
-#[allow(missing_docs)]
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone)]
 enum Register {
@@ -45,7 +44,6 @@ enum Register {
     VALUE_REG = 0xF6,
 }
 
-#[allow(missing_docs)]
 impl Register {
     pub fn addr(&self) -> u8 {
         *self as u8
@@ -56,7 +54,6 @@ impl Register {
 // Instead of waiting for the maximum conversion time, the output pin
 // EOC (end of conversion) can be used to check if the conversion is
 // finished (logic 1) or still running (logic 0).
-#[allow(missing_docs)]
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone)]
 enum ControlRegisterValue {
@@ -65,6 +62,12 @@ enum ControlRegisterValue {
     CONTROL_VALUE_PRESSURE_OSRS_1 = 0x74, // Max. conversion time 7.5ms
     CONTROL_VALUE_PRESSURE_OSRS_2 = 0xB4, // Max. conversion time 13.5ms
     CONTROL_VALUE_PRESSURE_OSRS_3 = 0xF4, // Max. conversion time 25.5ms
+}
+
+impl ControlRegisterValue {
+    pub fn addr(&self) -> u8 {
+        *self as u8
+    }
 }
 
 impl From<Oversampling> for ControlRegisterValue {
@@ -77,13 +80,6 @@ impl From<Oversampling> for ControlRegisterValue {
                 ControlRegisterValue::CONTROL_VALUE_PRESSURE_OSRS_3
             }
         }
-    }
-}
-
-#[allow(missing_docs)]
-impl ControlRegisterValue {
-    pub fn addr(&self) -> u8 {
-        *self as u8
     }
 }
 
@@ -123,7 +119,6 @@ impl Coefficients {
 }
 
 /// Oversampling modes
-#[allow(missing_docs)]
 #[derive(Copy, Clone)]
 pub enum Oversampling {
     /// Number of samples 1, conversion time max 4.5ms, average current 3µA
@@ -156,16 +151,24 @@ pub type DeciCelcius = i32;
 /// Pressure in Pascal (Pa)
 pub type Pascal = i32;
 
-// Type of intermediate value from temperature calculation. Used in
-// pressure calculation after sensor read-out.
-type B5 = i32;
+/// Result of the BMP085 sensor read-out
+pub struct PT {
+    /// Temperature in deci Celsius, e.g. 241 for 24.1 ℃
+    pub temperature: DeciCelcius,
+    /// Pressure in Pascal relative to the location of the sensor.
+    /// Note that meteorological pressures are given relative to
+    /// normal null sea level in order to be location independent. The
+    /// function `pressure_to_normal_null` can be used to convert the
+    /// location pressure to normal null.
+    pub pressure: Pascal,
+}
 
 impl<I2C, TIMER, E> Bmp085<I2C, TIMER>
 where
     I2C: WriteRead<Error = E> + Write<Error = E>,
     TIMER: DelayUs<u16>,
 {
-    /// Create a new driver from a I2C peripheral
+    /// Create a new driver from a I2C peripheral with given oversampling settings.
     pub fn new(i2c: I2C, timer: TIMER, oss: Oversampling) -> Result<Self, E> {
         let mut bmp085 = Bmp085 {
             i2c,
@@ -216,7 +219,7 @@ where
         self.i2c.write(ADDRESS, &[reg.addr(), byte])
     }
 
-    /// Read temperature and pressure from sensor
+    /// Read temperature and pressure from sensor.
     pub fn read(&mut self) -> Result<PT, E> {
         // Read temperature, wait 4.5ms before reading the value
         self.write_register(
@@ -243,15 +246,8 @@ where
     }
 }
 
-/// Result of the BMP085 sensor read-out
-#[allow(dead_code)]
-pub struct PT {
-    temperature: DeciCelcius,
-    pressure: Pascal,
-}
-
 // Temperature calculation according data-sheet
-fn calculate_temperature(ut: i32, coeff: &Coefficients) -> (DeciCelcius, B5) {
+fn calculate_temperature(ut: i32, coeff: &Coefficients) -> (DeciCelcius, i32) {
     let x1: i32 = ((ut - i32(coeff.ac6)) * i32(coeff.ac5)) >> 15;
     let x2: i32 = (i32(coeff.mc) << 11) / (x1 + i32(coeff.md));
     let b5: i32 = x1 + x2; // Value b5 is used in pressure calculation
@@ -260,7 +256,7 @@ fn calculate_temperature(ut: i32, coeff: &Coefficients) -> (DeciCelcius, B5) {
 }
 
 // Pressure calculation according data-sheet
-fn calculate_true_pressure(up: i32, b5: B5, oss: Oversampling, coeff: &Coefficients) -> Pascal {
+fn calculate_true_pressure(up: i32, b5: i32, oss: Oversampling, coeff: &Coefficients) -> Pascal {
     let b6: i32 = b5 - 4000;
 
     // B3
@@ -290,12 +286,23 @@ fn calculate_true_pressure(up: i32, b5: B5, oss: Oversampling, coeff: &Coefficie
     p + ((x1 + x2 + 3791) >> 4)
 }
 
+/// Convert pressure from sensor to pressure in hecto Pascal (hPa)
+/// relative to normal null.
+///
+/// # Arguments
+///
+/// * `p` - Pressure in Pascal
+/// * `altitude` - Altitude in Meters
+///
+#[cfg(feature = "default")]
+pub fn pressure_to_normal_null(p: Pascal, altitude: u16) -> u16 {
+    let z = (p as f32) / libm::powf(1f32 - (f32::from(altitude) / 44330f32), 5.255f32);
+    libm::roundf(z / 100f32) as u16
+}
+
 #[cfg(test)]
 mod tests {
-
-    use super::{
-        calculate_temperature, calculate_true_pressure, Coefficients, Oversampling, Pascal,
-    };
+    use super::*;
 
     #[test]
     fn calculate_temp_pressure() {
@@ -325,5 +332,14 @@ mod tests {
 
         let pressure: Pascal = calculate_true_pressure(up, b5, oss, &coeff);
         assert_eq!(pressure, 69964);
+    }
+
+    #[test]
+    #[cfg(feature = "default")]
+    fn calculate_pressure_to_normal_null() {
+        let p: Pascal = 93728;
+        let alt: u16 = 691; // Holzkirchen, Germany
+        let pnn = pressure_to_normal_null(p, alt);
+        assert_eq!(1018, pnn);
     }
 }

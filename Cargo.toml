@@ -1,7 +1,7 @@
 [package]
 authors = ["Marcus Geiger"]
 categories = ["embedded", "hardware-support", "no-std"]
-description = "A platform agnostic driver to interface the BOSCH BMP085 sensor"
+description = "A platform agnostic driver to interface the BOSCH BMP085 pressure sensor"
 edition = "2018"
 keywords = ["embedded-hal-driver", "pressure", "thermometer"]
 license = "MIT OR Apache-2.0"
@@ -9,9 +9,13 @@ name = "bmp085"
 repository = "https://github.com/bwolf/bmp085"
 version = "0.1.0"
 
+[features]
+default = ["libm"]
+
 [dependencies]
 hal = { package = "embedded-hal", version = "0.2.0" }
 generic-array = "0.11.0"
+libm = { version = "0.1.2", optional = true }
 
 [dependencies.cast]
 default-features = false
