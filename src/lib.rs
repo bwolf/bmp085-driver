@@ -1,10 +1,20 @@
-//! A platform agnostic driver to interface the BOSCH BMP085 sensor.
+//! A platform agnostic driver to interface the [Bosch Sensortec](https://www.bosch-sensortec.com) BMP085 pressure sensor, written in Rust.
 //!
-//! Please note that the BMP085 sensor has been discontinued in 2013.
+//! Please note that the BMP085 sensor has been [discontinued](https://media.digikey.com/pdf/PCNs/Bosch/BMP085_Disc.pdf) by Bosch Sensortec in 2013.
 //!
-//! This driver was built using [`embedded-hal`] traits.
+//!This driver is build using the [embedded-hal](https://docs.rs/embedded-hal/) traits.
 //!
-//! [`embedded-hal`]: https://docs.rs/embedded-hal/0.2
+//! [embedded-hal]: https://docs.rs/embedded-hal/0.2
+//!
+//! ## Features
+//!
+//! - Reading the calibration coefficients from the sensor eeprom
+//! - Reading the uncompensated temperature from the sensor
+//! - Converting the uncompensated temperature to d℃
+//! - Reading the uncompensated pressure from the sensor
+//! - Converting the uncompensated pressure to hPa
+//! - Converting the pressure in hPa to hPa relative to altitude normal null (optional feature)
+//! - Tests for the conversion functions according to the data-sheet of the sensor
 
 #![no_std]
 #![deny(missing_docs)]
@@ -147,7 +157,7 @@ pub struct Bmp085<I2C, TIMER: DelayUs<u16>> {
     oss: Oversampling,
 }
 
-/// Temperature in deci Celsius (dC)
+/// Temperature in deci degree Celsius (dC)
 pub type DeciCelcius = i32;
 
 /// Pressure in Pascal (Pa)
@@ -155,13 +165,13 @@ pub type Pascal = i32;
 
 /// Result of the BMP085 sensor read-out
 pub struct PT {
-    /// Temperature in deci Celsius, e.g. 241 for 24.1 ℃
+    /// Temperature in deci degree Celsius, e.g. 241 for 24.1 ℃
     pub temperature: DeciCelcius,
     /// Pressure in Pascal relative to the location of the sensor.
     /// Note that meteorological pressures are given relative to
-    /// normal null sea level in order to be location independent. The
-    /// function `pressure_to_normal_null` can be used to convert the
-    /// location pressure to normal null.
+    /// normal null sea level in order to be location independent and
+    /// comparable. The function `pressure_to_normal_null` can be used
+    /// to convert the location pressure to normal null.
     pub pressure: Pascal,
 }
 
@@ -288,8 +298,8 @@ fn calculate_true_pressure(up: i32, b5: i32, oss: Oversampling, coeff: &Coeffici
     p + ((x1 + x2 + 3791) >> 4)
 }
 
-/// Convert pressure from sensor to pressure in hecto Pascal (hPa)
-/// relative to normal null.
+/// Convert pressure from sensor (altitude dependant) to pressure in
+/// hecto Pascal (hPa) relative to sea level normal null.
 ///
 /// # Arguments
 ///
@@ -308,7 +318,7 @@ mod tests {
 
     #[test]
     fn calculate_temp_pressure() {
-        // Coefficient values according data-sheet
+        // Example coefficient values according data-sheet
         let coeff = Coefficients {
             ac1: 408,
             ac2: -72,
@@ -333,7 +343,7 @@ mod tests {
         assert_eq!(b5, 2400); // Differs from data-sheet example, IMHO OK
 
         let pressure: Pascal = calculate_true_pressure(up, b5, oss, &coeff);
-        assert_eq!(pressure, 69964);
+        assert_eq!(pressure, 69964); // Value from data-sheet
     }
 
     #[test]
