@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 name = "bmp085-driver"
 readme = "README.md"
 repository = "https://github.com/bwolf/bmp085-driver"
-version = "0.1.1"
+version = "0.1.2"
 
 [features]
 default = ["libm"]

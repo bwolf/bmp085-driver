@@ -1,4 +1,6 @@
-//! A platform agnostic driver to interface the BOSCH BMP085 sensor
+//! A platform agnostic driver to interface the BOSCH BMP085 sensor.
+//!
+//! Please note that the BMP085 sensor has been discontinued in 2013.
 //!
 //! This driver was built using [`embedded-hal`] traits.
 //!

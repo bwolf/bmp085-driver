@@ -1,8 +1,10 @@
-# `BMP085-driver`
+# `BMP085-driver` [![Latest Version]][crates.io]
+
+[Latest Version]: https://img.shields.io/crates/v/bmp085-driver.svg
 
 A platform agnostic driver to interface the BOSCH BMP085 pressure sensor, written in Rust.
 
-Please note that the BMP085 has been discontinued in 2013.
+Please note that the BMP085 sensor has been discontinued in 2013.
 
 This driver was built using the [embedded-hal](https://docs.rs/embedded-hal/) traits.
 
