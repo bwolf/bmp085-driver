@@ -1,0 +1,47 @@
+This one is not included into cargo/examples directory because of
+linker scripts and stuff.
+
+Start with:
+cargo generate --git https://github.com/rust-embedded/cortex-m-quickstart --name embrust-first
+cd embrust-first
+
+Edit src/main.rs with and follow the guide of cortex-m-quickstart:
+
+#![no_std]
+#![no_main]
+
+extern crate panic_semihosting;
+
+use cortex_m_semihosting::hprintln;
+
+use bmp085;
+use cortex_m_rt::entry;
+use f3::hal::{delay::Delay, i2c::I2c, prelude::*, stm32f30x};
+
+#[entry]
+fn main() -> ! {
+    let cp = cortex_m::Peripherals::take().unwrap();
+    let dp = stm32f30x::Peripherals::take().unwrap();
+    let mut flash = dp.FLASH.constrain();
+    let mut rcc = dp.RCC.constrain();
+    let clocks = rcc.cfgr.freeze(&mut flash.acr);
+    let delay = Delay::new(cp.SYST, clocks);
+
+    let mut gpiob = dp.GPIOB.split(&mut rcc.ahb);
+    let scl = gpiob.pb6.into_af4(&mut gpiob.moder, &mut gpiob.afrl);
+    let sda = gpiob.pb7.into_af4(&mut gpiob.moder, &mut gpiob.afrl);
+    let i2c = I2c::i2c1(dp.I2C1, (scl, sda), 400.khz(), clocks, &mut rcc.apb1);
+
+    let oss = bmp085::Oversampling::Standard;
+    let mut bmp085 = bmp085::Bmp085::new(i2c, delay, oss).unwrap();
+
+    //Temperature 246 d℃, pressure 92837 hPa
+
+    let p = bmp085.read().unwrap();
+
+    let temp = p.temperature as f32 / 10f32;
+    let press = bmp085::pressure_to_normal_null(p.pressure, 691);
+    hprintln!("Temperature {} , pressure {} hPa", temp, press).unwrap();
+
+    loop {}
+}
