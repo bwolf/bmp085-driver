@@ -1,12 +1,15 @@
-This one is not included into cargo/examples directory because of
-linker scripts and stuff.
+Example use with cortex-m-quickstart (not included into cargo/examples directory because of
+linker scripts and stuff).
 
 Start with:
 cargo generate --git https://github.com/rust-embedded/cortex-m-quickstart --name embrust-first
 cd embrust-first
 
-Edit src/main.rs with and follow the guide of cortex-m-quickstart:
+Add dependencies:
+f3 = "0.6.1"
+bmp085 = { package = "bmp085-driver", version = "0.1.2" }
 
+Edit src/main.rs with and follow the guide of cortex-m-quickstart:
 #![no_std]
 #![no_main]
 
